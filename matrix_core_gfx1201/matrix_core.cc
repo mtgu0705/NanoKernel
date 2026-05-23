@@ -49,59 +49,54 @@ __device__ int32x4_t make_buffer_resource(const void * ptr, uint32_t size = 0xff
     buffer_resource res {ptr, size, BUFFER_LOAD_DWORD3};
     return __builtin_bit_cast(int32x4_t, res);
 }
+
 // A: M*K, B: N*K, C:M*N, use 16x16x16 fp16
 /*
 * V0/V1/   is 32bit register holding A/B matrix data, each register contains 2 fp16 pixel along gemm-k
 * a0/a1... is 32bit register holding C matrix data in fp32 (this instruction use fp32 as acc)
 * L0, L1.. is lane id with in a single wave, here we only have lane 0~63 (wave64)
-* each thread need 2 registers for A, 2 regs for B, 16 regs for C
+* each thread need 4 registers for A, 4 regs for B, 8 regs for C
 
-                                 L0 L1 L2 L3 L4 L5 L6 L7 L8 L9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
-                       Matrix B   __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __
-                                 |v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0| k0  L0~31
-                                 |__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__| k1
-                                 |v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1| k2
-                                _|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|_k3
-                                 |v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0| k4  L32~63
-                                 |__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__| k5
-                                 |v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1| k6
-                                _|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|_k7
+                                                          L0 L1 L2 L3 L4 L5 L6 L7 L8 L9 10 11 12 13 14 15 
+                                                Matrix B   __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __
+                                                          |v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0   k0  L0 ~ 15
+                                                          |__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__   k1
+                                                          |v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1   k2
+                                                         _|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|___  k3
+                                                          |v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0   k4  L16 ~ 31
+                                                          |__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__   k5
+                                                          |v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1   k6
+                                                         _|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|___  k7
+                                                          |v2|v2|v2|v2|v2|v2|v2|v2|v2|v2|v2|v2|v2|v2|v2|v2   k8  L0 ~ 15
+                                                          |__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__   k9
+                                                          |v3|v3|v3|v3|v3|v3|v3|v3|v3|v3|v3|v3|v3|v3|v3|v3   10
+                                                         _|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|___  11
+                                                          |v2|v2|v2|v2|v2|v2|v2|v2|v2|v2|v2|v2|v2|v2|v2|v2   12  L16 ~ 31
+                                                          |__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__   13
+                                                          |v3|v3|v3|v3|v3|v3|v3|v3|v3|v3|v3|v3|v3|v3|v3|v3   14
+                                                         _|__|__|__|__|__|__|__|__|__|__|__|__|__|__|__|___  15
+
      Matrix A
-     L0~31       L32~63           Matrix C
-     k0 k1 k2 k3 k4 k5 k6 k7      L0 L1 L2 L3 L4 L5 L6 L7 L8 L9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
-     _____ _____|_____ _____      __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __
-L0  |v0   |v1   |v0   |v1   |    |a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0| L0~31
-L1  |v0   |v1   |v0   |v1   |    |a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|
-L2  |v0   |v1   |v0   |v1   |    |a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|
-L3  |v0   |v1   |v0   |v1   |   _|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|_
-L4  |v0   |v1   |v0   |v1   |    |a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0|a0| L32~63
-L5  |v0   |v1   |v0   |v1   |    |a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|a1|
-L6  |v0   |v1   |v0   |v1   |    |a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|a2|
-L7  |v0   |v1   |v0   |v1   |   _|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|a3|_
-L8  |v0   |v1   |v0   |v1   |    |a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4| L0~31
-L9  |v0   |v1   |v0   |v1   |    |a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|
-L10 |v0   |v1   |v0   |v1   |    |a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|
-L11 |v0   |v1   |v0   |v1   |   _|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|_
-L12 |v0   |v1   |v0   |v1   |    |a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4|a4| L32~63
-L13 |v0   |v1   |v0   |v1   |    |a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|a5|
-L14 |v0   |v1   |v0   |v1   |    |a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|a6|
-L15 |v0   |v1   |v0   |v1   |   _|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|a7|_
-L16 |v0   |v1   |v0   |v1   |    |a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8| L0~31
-L17 |v0   |v1   |v0   |v1   |    |a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|
-L18 |v0   |v1   |v0   |v1   |    |10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|
-L19 |v0   |v1   |v0   |v1   |   _|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|_
-L20 |v0   |v1   |v0   |v1   |    |a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8|a8| L32~63
-L21 |v0   |v1   |v0   |v1   |    |a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|a9|
-L22 |v0   |v1   |v0   |v1   |    |10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|10|
-L23 |v0   |v1   |v0   |v1   |   _|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|11|_
-L24 |v0   |v1   |v0   |v1   |    |12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12| L0~31
-L25 |v0   |v1   |v0   |v1   |    |13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|
-L26 |v0   |v1   |v0   |v1   |    |14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|
-L27 |v0   |v1   |v0   |v1   |   _|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|_
-L28 |v0   |v1   |v0   |v1   |    |12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12|12| L32~63
-L29 |v0   |v1   |v0   |v1   |    |13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|13|
-L30 |v0   |v1   |v0   |v1   |    |14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|14|
-L31 |v0___|v1___|v0___|v1___|   _|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|15|_
+     L0 ~ 16     L15 ~ 31    L0 ~ 15     L16 ~ 31          Matrix C
+     k0 k1 k2 k3 k4 k5 k6 k7 k8 k9 10 11 12 13 14 15       L0 L1 L2 L3 L4 L5 L6 L7 L8 L9 10 11 12 13 14 15 
+     _____ _____|_____ _____ _____ _____|_____ _____       __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ 
+L0  |v0   |v1   |v0   |v1   |v2   |v3   |v2   |v3   |     |v0|v0|v0|v0|v0|v0|v0|v0|v0|vv|v0|v0|v0|v0|vv|v0| L0 ~ 15
+L1  |v0   |v1   |v0   |v1   |v2   |v3   |v2   |v3   |     |v1|v1|v1|v1|v1|v1|v1|v1|v1|vv|v1|v1|v1|v1|vv|v1|
+L2  |v0   |v1   |v0   |v1   |v2   |v3   |v2   |v3   |     |v2|v2|v2|v2|v2|v2|v2|v2|v2|vv|v2|v2|v2|v2|vv|v2|
+L3  |v0   |v1   |v0   |v1   |v2   |v3   |v2   |v3   |    _|v3|v3|v3|v3|v3|v3|v3|v3|v3|vv|v3|v3|v3|v3|vv|v3|_
+L4  |v0   |v1   |v0   |v1   |v2   |v3   |v2   |v3   |     |v4|v4|v4|v4|v4|v4|v4|v4|v4|vv|v4|v4|v4|v4|vv|v4| 
+L5  |v0   |v1   |v0   |v1   |v2   |v3   |v2   |v3   |     |v5|v5|v5|v5|v5|v5|v5|v5|v5|vv|v5|v5|v5|v5|vv|v5|
+L6  |v0   |v1   |v0   |v1   |v2   |v3   |v2   |v3   |     |v6|v6|v6|v6|v6|v6|v6|v6|v6|vv|v6|v6|v6|v6|vv|v6|
+L7  |v0   |v1   |v0   |v1   |v2   |v3   |v2   |v3   |    _|v7|v7|v7|v7|v7|v7|v7|v7|v7|vv|v7|v7|v7|v7|vv|v7|_
+L8  |v0   |v1   |v0   |v1   |v2   |v3   |v2   |v3   |     |v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0|v0| L16 ~ 31
+L9  |v0   |v1   |v0   |v1   |v2   |v3   |v2   |v3   |     |v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|v1|
+L10 |v0   |v1   |v0   |v1   |v2   |v3   |v2   |v3   |     |v2|v2|v2|v2|v2|v2|v2|v2|v2|v2|v2|v2|v2|v2|v2|v2|
+L11 |v0   |v1   |v0   |v1   |v2   |v3   |v2   |v3   |    _|v3|v3|v3|v3|v3|v3|v3|v3|v3|v3|v3|v3|v3|v3|v3|v3|_
+L12 |v0   |v1   |v0   |v1   |v2   |v3   |v2   |v3   |     |v4|v4|v4|v4|v4|v4|v4|v4|v4|v4|v4|v4|v4|v4|v4|v4| 
+L13 |v0   |v1   |v0   |v1   |v2   |v3   |v2   |v3   |     |v5|v5|v5|v5|v5|v5|v5|v5|v5|v5|v5|v5|v5|v5|v5|v5|
+L14 |v0   |v1   |v0   |v1   |v2   |v3   |v2   |v3   |     |v6|v6|v6|v6|v6|v6|v6|v6|v6|v6|v6|v6|v6|v6|v6|v6|
+L15 |v0   |v1   |v0   |v1   |v2   |v3   |v2   |v3   |    _|v7|v7|v7|v7|v7|v7|v7|v7|v7|v7|v7|v7|v7|v7|v7|v7|_
+
                 |
 */
 __global__ void 
@@ -140,14 +135,13 @@ matrix_core_kernel_standard(const void* __restrict__ ptr_a,
         *(reinterpret_cast<fp16_t*>(ptr_c) + offset_c + i*stride_c) = static_cast<fp16_t>(v_c[i]);
     }
 #else
-    // LDS data shuffle
+    // LDS data shuffle for data coalescing store.
     const int tid = threadIdx.x;
-    const int warp_id = tid / 32;
     const int lane_id = tid % 32; 
 
-    alignas(16) __shared__ __half lds_shared[1 * 256];
+    alignas(16) __shared__ __half lds_shared[1 * 256];  // only 1 wave
     
-    __half* lds_wave = &lds_shared[warp_id * 256];
+    __half* lds_wave = &lds_shared[0 * 256];   // LDS base start from 0
 
     const int col = lane_id % 16;
     const int row_start = (lane_id / 16) * 8;
@@ -159,8 +153,11 @@ matrix_core_kernel_standard(const void* __restrict__ ptr_a,
     }
     __syncthreads();
 
-    const int r_write = lane_id / 2;
-    const int c_write = (lane_id % 2) * 8; 
+    // const int r_write = lane_id / 2;
+    // const int c_write = (lane_id % 2) * 8; 
+
+    const int r_write = line_id >> 1;              // split 32 threads into 16 groups, each group has 2 threads, and 2 threads read 1 row.
+    const int c_write = (line_id & 0x1) * 8;       // in each group, the 1st thread offset is 0, the 2nd thread offset is 8, the unit is element(FP16)
 
     using int4_t = int4;
 
