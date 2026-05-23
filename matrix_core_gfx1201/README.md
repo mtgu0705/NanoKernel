@@ -1,5 +1,5 @@
 # matrix core
-this folder contains a simple example to showcase the usage of AMD's matrix core. we use `__builtin_amdgcn_mfma_f32_32x32x8f16` instruction with single wave to show case the layout requirement of this instruction. this instruction is supported for MI100/200/300 serious of AMDGPU (change arch number inside rebuild.sh to build on proper arch)
+this folder contains a simple example to showcase the usage of AMD's RX9070 matrix instruction. we use `__builtin_amdgcn_wmma_f32_16x16x16_f16_w32_gfx12` instruction with single wave to show case the layout requirement of this instruction. this instruction is supported for RX9000 serious of AMDGPU (change arch number inside rebuild.sh to build on proper arch)
 
 ## 3 different way to play sith matrix core layout
 ```
