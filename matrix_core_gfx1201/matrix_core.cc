@@ -108,6 +108,7 @@ matrix_core_kernel_standard(const void* __restrict__ ptr_a,
                    int stride_c)
 {
     // 32x32x8 gemm, assume only launced 1 wave
+#if 0
     int offset_a = (((threadIdx.x >> 4)) << 2) + ((threadIdx.x & 0xf) * stride_a);
     int offset_b = (((threadIdx.x >> 4)) << 2) + ((threadIdx.x & 0xf) * stride_b);
 
@@ -118,7 +119,14 @@ matrix_core_kernel_standard(const void* __restrict__ ptr_a,
     fp16x8_t v_b;
     v_b.lo = *reinterpret_cast<const fp16x4_t*>(reinterpret_cast<const fp16_t*>(ptr_b) + offset_b);
     v_b.hi = *reinterpret_cast<const fp16x4_t*>(reinterpret_cast<const fp16_t*>(ptr_b) + offset_b + 8);
-    
+#else
+    int offset_a = (((threadIdx.x >> 4)) << 3) + ((threadIdx.x & 0xf) * stride_a);
+    int offset_b = (((threadIdx.x >> 4)) << 3) + ((threadIdx.x & 0xf) * stride_b);
+
+    fp16x8_t v_a = *reinterpret_cast<const fp16x8_t*>(reinterpret_cast<const fp16_t*>(ptr_a) + offset_a);
+    fp16x8_t v_b = *reinterpret_cast<const fp16x8_t*>(reinterpret_cast<const fp16_t*>(ptr_b) + offset_b);
+#endif
+
     fp32x8_t v_c = {.0f};  // clear
 
     v_c = __builtin_amdgcn_wmma_f32_16x16x16_f16_w32_gfx12(v_a, v_b, v_c);
@@ -156,8 +164,8 @@ matrix_core_kernel_standard(const void* __restrict__ ptr_a,
     // const int r_write = lane_id / 2;
     // const int c_write = (lane_id % 2) * 8; 
 
-    const int r_write = line_id >> 1;              // split 32 threads into 16 groups, each group has 2 threads, and 2 threads read 1 row.
-    const int c_write = (line_id & 0x1) * 8;       // in each group, the 1st thread offset is 0, the 2nd thread offset is 8, the unit is element(FP16)
+    const int r_write = lane_id >> 1;              // split 32 threads into 16 groups, each group has 2 threads, and 2 threads read 1 row.
+    const int c_write = (lane_id & 0x1) * 8;       // in each group, the 1st thread offset is 0, the 2nd thread offset is 8, the unit is element(FP16)
 
     using int4_t = int4;
 
